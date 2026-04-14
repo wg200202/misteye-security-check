@@ -1,8 +1,8 @@
 ---
 name: misteye-security-check
-description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前安全审计、域名或 URL 访问前安全检查、IoC 恶意检测、供应链风险拦截。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；安装完成后必须提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
+description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.3.0"
+  version: "1.4.1"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -17,11 +17,12 @@ metadata:
 - 唯一认证方式：`x-api-key` 请求头（建议使用 `MISTEYE_API_KEY` 环境变量）
 - 唯一检测类型：`ip`、`domain`、`url`、`file_hash`
 - 最高优先级场景：依赖安装前检查、域名或 URL 访问前检查
+- Skill/MCP 安装场景只检查“依赖安装库相关对象”，不对 Skill/MCP 本体做恶意判定
 - 每日巡检第一步：先检查上游仓库是否有新版本，并在发现新版本时强提醒
 
 ## 版本信息（本地）
 
-- 当前版本：`v1.3.0`
+- 当前版本：`v1.4.1`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -34,6 +35,17 @@ metadata:
 
 1. 依赖安装前（供应链风险）
 2. 域名或 URL 访问前（外链风险）
+3. Skill/MCP 安装前（必须先扫描其内部依赖声明）
+
+Skill/MCP 安装专项规则（必须）：
+
+1. 仅扫描依赖声明文件与依赖来源对象；不对 Skill/MCP 的 `SKILL.md`、提示词文本、脚本逻辑本体做恶意判定。
+2. 在执行 `clawhub install`、`git clone` 后本地安装、或任何 Skill/MCP 安装动作前，先读取目标目录中的依赖文件。
+3. 从依赖文件中提取可检测对象：依赖源域名、下载 URL、文件哈希（若有）。
+4. 对每个可检测对象调用 MistEye `detect`。
+5. 任一对象命中 `malicious`，立即阻断安装并输出“已拦截”。
+6. 若依赖项无法形成可检测对象（无法映射到 domain/url/file_hash），按 `no_check` 处理并阻断（“已拦截（未完成检测）”）。
+7. 仅当依赖相关对象全部完成检测且未命中阻断条件时，才允许继续安装 Skill/MCP。
 
 依赖检查覆盖清单（全生态）：
 
@@ -98,13 +110,17 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 - 发生 `malicious` / `error` / `no_check` 时，结果必须包含“已拦截”四个字。
 - 禁止使用弱化表达（如“你可以先继续看看”“应该没问题”）。
 
-## 安装后强提醒巡检（OpenClaw / Hermes）
+## 安装后一次性强提醒巡检（OpenClaw / Hermes）
 
-当用户完成 skill 安装后，必须追加提醒（OpenClaw 与 Hermes 二选一即可）：
+当且仅当用户首次安装完成（或首次启用）时，必须追加一次提醒（OpenClaw 与 Hermes 二选一即可）：
 
 - 可开启主动巡检（OpenClaw 或 Hermes）
 - 默认频率：每天一次
 - 重点是“如何开启”，不展开完整安全体系
+- 巡检脚本属于用户环境中的外部脚本（例如 `~/.openclaw/workspace/scripts/nightly-security-audit.sh`）；本 skill 不内置 `.sh` 文件
+- 提醒触发条件：首次安装完成 / 首次启用
+- 禁止重复提醒：后续日常检测、普通问答、常规使用不再主动重复该提醒
+- 仅在用户明确要求“配置巡检/查看巡检命令”时再次给出巡检配置
 
 每日巡检任务固定顺序（必须）：
 
@@ -197,9 +213,10 @@ Hermes 使用前置条件（必须提醒）：
 ### 模板 C：安装完成后提醒
 
 ```text
-安装已完成。建议立即开启主动巡检：默认每天 1 次。
+首次安装已完成。建议开启主动巡检：默认每天 1 次。
 巡检会先检查 https://github.com/wg200202/misteye-security-check 是否有新版本；如有更新会先提醒你再继续巡检。
-你可以直接配置 OpenClaw 或 Hermes 定时巡检，这样后续依赖与外链风险会持续被动发现。
+巡检主要会做三件事：1) 检查版本更新；2) 按你配置的安全审计脚本做依赖/外链风险回看；3) 把结果集中汇报。
+主要作用：把“手动才会做”的安全检查变成“每天自动做”，更早发现供应链投毒、恶意外链和规则失效导致的漏检风险。
 ```
 
 ## 输出格式
