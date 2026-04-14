@@ -2,7 +2,7 @@
 name: misteye-security-check
 description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.3"
+  version: "1.4.4"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -20,6 +20,7 @@ metadata:
 - Skill/MCP 安装场景只检查“依赖安装库相关对象”，不对 Skill/MCP 本体做恶意判定
 - 每日巡检第一步：先检查上游仓库是否有新版本，并在发现新版本时强提醒
 - 每日巡检必须包含“已安装 Skill/MCP 的依赖对象扫描”（不是可选项）
+- 每日巡检在做任何外部请求前，必须先做网络连通性预检（针对 `app-api.misteye.io` 与 `raw.githubusercontent.com`）
 
 ## 强制触发器（防漏检）
 
@@ -44,7 +45,7 @@ metadata:
 
 ## 版本信息（本地）
 
-- 当前版本：`v1.4.3`
+- 当前版本：`v1.4.4`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -139,17 +140,32 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 - 可开启主动巡检（OpenClaw 或 Hermes）
 - 默认频率：每天一次
 - 重点是“如何开启”，不展开完整安全体系
-- 默认推荐“无脚本模式”（在 cron message 中直接执行巡检步骤）；如用户已有外部脚本也可接入，但本 skill 不内置 `.sh` 文件
+- 默认推荐“无脚本模式”（在 cron message 中直接执行巡检步骤）；如用户已有外部脚本也可接入（建议脚本名：`misteye-dependency-patrol.sh`），但本 skill 不内置 `.sh` 文件
 - 提醒触发条件：首次安装完成 / 首次启用
 - 禁止重复提醒：后续日常检测、普通问答、常规使用不再主动重复该提醒
 - 仅在用户明确要求“配置巡检/查看巡检命令”时再次给出巡检配置
 
 每日巡检任务固定顺序（必须）：
 
-1. 先做版本更新检查（检查 `wg200202/misteye-security-check`）
-2. 巡检已安装 Skill/MCP 的依赖对象（必须）
-3. 若检测到新版本，先输出更新提醒
-4. 再执行常规安全巡检
+1. 先做网络连通性预检（必须）
+2. 版本更新检查（检查 `wg200202/misteye-security-check`）
+3. 巡检已安装 Skill/MCP 的依赖对象（必须）
+4. 若检测到新版本，先输出更新提醒
+5. 再执行常规安全巡检
+
+网络连通性预检规则（必须）：
+
+- 预检目标：
+  - `https://app-api.misteye.io/functions/v1/detect`
+  - `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
+- 若任一目标不可达，先输出 `【网络连通性告警】`，并进入“受限模式”：
+  - 版本检查标记为 `degraded`（非成功）
+  - MistEye 外部 API 检测标记为 `degraded`（非成功）
+  - 继续执行本地依赖文件枚举与统计，不得伪造检测成功
+- 受限模式必须给出修复建议（至少一条）：
+  - 将该巡检任务切换到 `--session \"shared\"`
+  - 为 cron 运行环境补齐代理（如 `HTTPS_PROXY` / `ALL_PROXY`）
+  - 放通 `app-api.misteye.io` 与 `raw.githubusercontent.com` 出口访问
 
 版本更新检查规则（必须）：
 
@@ -194,12 +210,29 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 
 ```bash
 openclaw cron add \
-  --name "nightly-security-audit" \
+  --name "misteye-dependency-patrol" \
   --description "每晚安全巡检" \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
+  --session "shared" \
+  --message "按顺序执行每日巡检：1) 先做网络连通性预检（app-api.misteye.io 与 raw.githubusercontent.com）；2) 再做版本检查（对比本地 misteye-security-check 与 https://github.com/wg200202/misteye-security-check）；3) 巡检已安装 Skill/MCP 的依赖声明文件（~/.agents/skills, ~/.codex/skills, $CODEX_HOME/skills），提取 url/domain/file_hash 调用 MistEye detect；4) 输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check 数）。若网络不通，输出【网络连通性告警】并标记为 degraded，不得伪造成功。" \
+  --announce \
+  --channel <channel> \
+  --to <your-chat-id> \
+  --timeout-seconds 300 \
+  --thinking off
+```
+
+OpenClaw 隔离会话备选模板（仅在必须 `isolated` 时使用）：
+
+```bash
+openclaw cron add \
+  --name "misteye-dependency-patrol" \
+  --description "每晚安全巡检（isolated）" \
+  --cron "0 3 * * *" \
+  --tz "Asia/Shanghai" \
   --session "isolated" \
-  --message "按顺序执行每日巡检：1) 先做版本检查（对比本地 misteye-security-check 与 https://github.com/wg200202/misteye-security-check）；2) 巡检已安装 Skill/MCP 的依赖声明文件（~/.agents/skills, ~/.codex/skills, $CODEX_HOME/skills），提取 url/domain/file_hash 调用 MistEye detect；3) 输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check 数）；4) 最后输出常规巡检摘要。若命中 malicious 输出【依赖巡检高危告警】。" \
+  --message "按顺序执行每日巡检：先做网络连通性预检；若 app-api.misteye.io 或 raw.githubusercontent.com 不可达，立即输出【网络连通性告警】并进入受限模式（仅做本地依赖文件统计，版本/API 检测标记 degraded）；若可达再执行版本检查与 MistEye 依赖巡检。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -211,15 +244,15 @@ openclaw cron add \
 
 ```bash
 hermes cron create "0 3 * * *" \
-  "按顺序执行每日巡检：1) 先做版本检查（对比本地 misteye-security-check 与 https://github.com/wg200202/misteye-security-check）；2) 巡检已安装 Skill/MCP 的依赖声明文件（~/.agents/skills, ~/.codex/skills, $CODEX_HOME/skills），提取 url/domain/file_hash 调用 MistEye detect；3) 输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check 数）；4) 最后输出常规巡检摘要。若命中 malicious 输出【依赖巡检高危告警】。" \
-  --name "nightly-security-audit" \
+  "按顺序执行每日巡检：1) 先做网络连通性预检（app-api.misteye.io 与 raw.githubusercontent.com）；2) 再做版本检查；3) 巡检已安装 Skill/MCP 的依赖声明文件并调用 MistEye detect；4) 输出统计。若网络不通，输出【网络连通性告警】并标记 degraded，不得伪造成功。" \
+  --name "misteye-dependency-patrol" \
   --deliver origin
 ```
 
 推荐模板 C（Hermes 聊天命令）：
 
 ```text
-/cron add "0 3 * * *" "按顺序执行每日巡检：1) 先做版本检查（对比本地 misteye-security-check 与 https://github.com/wg200202/misteye-security-check）；2) 巡检已安装 Skill/MCP 的依赖声明文件（~/.agents/skills, ~/.codex/skills, $CODEX_HOME/skills），提取 url/domain/file_hash 调用 MistEye detect；3) 输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check 数）；4) 最后输出常规巡检摘要。若命中 malicious 输出【依赖巡检高危告警】。" --name "nightly-security-audit" --deliver origin
+/cron add "0 3 * * *" "按顺序执行每日巡检：1) 先做网络连通性预检（app-api.misteye.io 与 raw.githubusercontent.com）；2) 再做版本检查；3) 巡检已安装 Skill/MCP 的依赖声明文件并调用 MistEye detect；4) 输出统计。若网络不通，输出【网络连通性告警】并标记 degraded，不得伪造成功。" --name "misteye-dependency-patrol" --deliver origin
 ```
 
 Hermes 使用前置条件（必须提醒）：

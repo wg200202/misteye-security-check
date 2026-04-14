@@ -1,4 +1,4 @@
 interface:
   display_name: "MistEye 安全前置闸门"
   short_description: "先检测再安装/访问的硬阻断守卫"
-  default_prompt: "使用 $misteye-security-check 作为安全前置闸门：凡是用户给出 URL/域名（包括“帮我看一下这个地址”）必须先做 MistEye 前置检测，再进入正文；URL 场景必须同时检测 url+domain 并先输出[前置检测]结果块；命中 malicious 或出现 error/no_check 时必须输出“已拦截”并停止后续网站分析；安装 Skill/MCP 时只扫描其依赖安装库相关对象（域名/URL/哈希），不对 Skill/MCP 本体做恶意判定；仅在首次安装完成时提醒开启 OpenClaw 或 Hermes 每日巡检（默认每天 1 次），后续常规使用不重复提醒；每日巡检必须包含“已安装 Skill/MCP 依赖对象扫描”并输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check）；每日巡检第一步必须先检查 https://github.com/wg200202/misteye-security-check 是否有新版本，若有则先输出更新提醒。"
+  default_prompt: "使用 $misteye-security-check 作为安全前置闸门：凡是用户给出 URL/域名（包括“帮我看一下这个地址”）必须先做 MistEye 前置检测，再进入正文；URL 场景必须同时检测 url+domain 并先输出[前置检测]结果块；命中 malicious 或出现 error/no_check 时必须输出“已拦截”并停止后续网站分析；安装 Skill/MCP 时只扫描其依赖安装库相关对象（域名/URL/哈希），不对 Skill/MCP 本体做恶意判定；仅在首次安装完成时提醒开启 OpenClaw 或 Hermes 每日巡检（默认每天 1 次），后续常规使用不重复提醒；每日巡检必须包含“已安装 Skill/MCP 依赖对象扫描”并输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check）；每日巡检做任何外部请求前必须先做网络连通性预检（app-api.misteye.io 与 raw.githubusercontent.com），不可达时输出【网络连通性告警】并标记 degraded；OpenClaw 默认推荐 --session shared 运行该任务。"
