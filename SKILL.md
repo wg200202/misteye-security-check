@@ -2,7 +2,7 @@
 name: misteye-security-check
 description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.2"
+  version: "1.4.3"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -19,6 +19,7 @@ metadata:
 - 最高优先级场景：依赖安装前检查、域名或 URL 访问前检查
 - Skill/MCP 安装场景只检查“依赖安装库相关对象”，不对 Skill/MCP 本体做恶意判定
 - 每日巡检第一步：先检查上游仓库是否有新版本，并在发现新版本时强提醒
+- 每日巡检必须包含“已安装 Skill/MCP 的依赖对象扫描”（不是可选项）
 
 ## 强制触发器（防漏检）
 
@@ -43,7 +44,7 @@ metadata:
 
 ## 版本信息（本地）
 
-- 当前版本：`v1.4.2`
+- 当前版本：`v1.4.3`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -138,7 +139,7 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 - 可开启主动巡检（OpenClaw 或 Hermes）
 - 默认频率：每天一次
 - 重点是“如何开启”，不展开完整安全体系
-- 巡检脚本属于用户环境中的外部脚本（例如 `~/.openclaw/workspace/scripts/nightly-security-audit.sh`）；本 skill 不内置 `.sh` 文件
+- 默认推荐“无脚本模式”（在 cron message 中直接执行巡检步骤）；如用户已有外部脚本也可接入，但本 skill 不内置 `.sh` 文件
 - 提醒触发条件：首次安装完成 / 首次启用
 - 禁止重复提醒：后续日常检测、普通问答、常规使用不再主动重复该提醒
 - 仅在用户明确要求“配置巡检/查看巡检命令”时再次给出巡检配置
@@ -146,8 +147,9 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 每日巡检任务固定顺序（必须）：
 
 1. 先做版本更新检查（检查 `wg200202/misteye-security-check`）
-2. 若检测到新版本，先输出更新提醒
-3. 再执行常规安全巡检
+2. 巡检已安装 Skill/MCP 的依赖对象（必须）
+3. 若检测到新版本，先输出更新提醒
+4. 再执行常规安全巡检
 
 版本更新检查规则（必须）：
 
@@ -158,6 +160,36 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
   - 远端版本 = 本地版本：输出“版本已是最新”
   - 版本检查失败（网络/解析失败）：输出 `【版本检查失败提醒】`，继续执行安全巡检
 
+已安装 Skill/MCP 依赖巡检规则（必须）：
+
+- 巡检目录（按存在情况执行）：
+  - `~/.agents/skills`
+  - `~/.codex/skills`
+  - `$CODEX_HOME/skills`
+- 只扫描依赖声明文件，不扫描 Skill/MCP 本体逻辑：
+  - Python: `requirements*.txt`, `pyproject.toml`, `Pipfile`, `poetry.lock`
+  - JS/TS: `package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`
+  - Go: `go.mod`, `go.sum`
+  - Rust: `Cargo.toml`, `Cargo.lock`
+  - Java: `pom.xml`, `build.gradle`, `build.gradle.kts`
+  - Ruby: `Gemfile`, `Gemfile.lock`
+  - PHP: `composer.json`, `composer.lock`
+  - .NET: `*.csproj`, `packages.lock.json`, `paket.dependencies`
+- 从依赖文件中提取并去重可检测对象：
+  - URL（`type=url`）
+  - 域名（`type=domain`）
+  - 文件哈希（`type=file_hash`，若存在）
+- 对每个对象调用 MistEye detect。
+- 巡检输出必须包含统计：
+  - 扫描到的依赖文件数
+  - 提取的可检测对象数（按 url/domain/file_hash 分组）
+  - `malicious` 命中数与对象清单
+  - `error/no_check` 数量
+- 巡检处理策略：
+  - `malicious`：输出 `【依赖巡检高危告警】`，要求立即人工复核并暂停相关安装/访问流程
+  - `error/no_check`：输出 `【依赖巡检未完成提醒】`，要求补检，不得宣称“安全”
+  - `no_match`：仅表示未命中情报库，继续巡检并附风险提示
+
 推荐模板 A（OpenClaw）：
 
 ```bash
@@ -167,7 +199,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "isolated" \
-  --message "先执行版本检查：对比本地 misteye-security-check 版本与 https://github.com/wg200202/misteye-security-check 的最新版本；若有更新先输出【版本更新提醒】（本地版本/远端版本/仓库地址），若检查失败输出【版本检查失败提醒】；然后执行 bash ~/.openclaw/workspace/scripts/nightly-security-audit.sh 并输出结果。" \
+  --message "按顺序执行每日巡检：1) 先做版本检查（对比本地 misteye-security-check 与 https://github.com/wg200202/misteye-security-check）；2) 巡检已安装 Skill/MCP 的依赖声明文件（~/.agents/skills, ~/.codex/skills, $CODEX_HOME/skills），提取 url/domain/file_hash 调用 MistEye detect；3) 输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check 数）；4) 最后输出常规巡检摘要。若命中 malicious 输出【依赖巡检高危告警】。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -179,7 +211,7 @@ openclaw cron add \
 
 ```bash
 hermes cron create "0 3 * * *" \
-  "先执行版本检查：对比本地 misteye-security-check 版本与 https://github.com/wg200202/misteye-security-check 的最新版本；若有更新先输出【版本更新提醒】（本地版本/远端版本/仓库地址），若检查失败输出【版本检查失败提醒】；然后执行 bash ~/.openclaw/workspace/scripts/nightly-security-audit.sh 并输出结果。" \
+  "按顺序执行每日巡检：1) 先做版本检查（对比本地 misteye-security-check 与 https://github.com/wg200202/misteye-security-check）；2) 巡检已安装 Skill/MCP 的依赖声明文件（~/.agents/skills, ~/.codex/skills, $CODEX_HOME/skills），提取 url/domain/file_hash 调用 MistEye detect；3) 输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check 数）；4) 最后输出常规巡检摘要。若命中 malicious 输出【依赖巡检高危告警】。" \
   --name "nightly-security-audit" \
   --deliver origin
 ```
@@ -187,7 +219,7 @@ hermes cron create "0 3 * * *" \
 推荐模板 C（Hermes 聊天命令）：
 
 ```text
-/cron add "0 3 * * *" "先执行版本检查：对比本地 misteye-security-check 版本与 https://github.com/wg200202/misteye-security-check 的最新版本；若有更新先输出【版本更新提醒】（本地版本/远端版本/仓库地址），若检查失败输出【版本检查失败提醒】；然后执行 bash ~/.openclaw/workspace/scripts/nightly-security-audit.sh 并输出结果。" --name "nightly-security-audit" --deliver origin
+/cron add "0 3 * * *" "按顺序执行每日巡检：1) 先做版本检查（对比本地 misteye-security-check 与 https://github.com/wg200202/misteye-security-check）；2) 巡检已安装 Skill/MCP 的依赖声明文件（~/.agents/skills, ~/.codex/skills, $CODEX_HOME/skills），提取 url/domain/file_hash 调用 MistEye detect；3) 输出统计（依赖文件数、检测对象数、malicious 命中、error/no_check 数）；4) 最后输出常规巡检摘要。若命中 malicious 输出【依赖巡检高危告警】。" --name "nightly-security-audit" --deliver origin
 ```
 
 Hermes 使用前置条件（必须提醒）：
@@ -236,7 +268,7 @@ Hermes 使用前置条件（必须提醒）：
 ```text
 首次安装已完成。建议开启主动巡检：默认每天 1 次。
 巡检会先检查 https://github.com/wg200202/misteye-security-check 是否有新版本；如有更新会先提醒你再继续巡检。
-巡检主要会做三件事：1) 检查版本更新；2) 按你配置的安全审计脚本做依赖/外链风险回看；3) 把结果集中汇报。
+巡检主要会做三件事：1) 检查版本更新；2) 扫描你已安装 Skill/MCP 的依赖声明并对提取的 url/domain/file_hash 做 MistEye 检测；3) 把结果集中汇报。
 主要作用：把“手动才会做”的安全检查变成“每天自动做”，更早发现供应链投毒、恶意外链和规则失效导致的漏检风险。
 ```
 
