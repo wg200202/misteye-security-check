@@ -1,8 +1,8 @@
 ---
 name: misteye-security-check
-description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
+description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.1"
+  version: "1.4.2"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -20,9 +20,30 @@ metadata:
 - Skill/MCP 安装场景只检查“依赖安装库相关对象”，不对 Skill/MCP 本体做恶意判定
 - 每日巡检第一步：先检查上游仓库是否有新版本，并在发现新版本时强提醒
 
+## 强制触发器（防漏检）
+
+出现以下任一情况，必须先做 MistEye 前置检测，再进入正文回答：
+
+- 用户输入包含 URL（`http://`、`https://`）
+- 用户输入包含可识别域名（如 `example.com`）
+- 用户让 agent “看一下/分析/检查/访问/打开/下载”某个网站、地址、链接
+
+高频口语触发示例（必须命中）：
+
+- `帮我看一下 https://...`
+- `这个地址安全吗`
+- `访问一下这个网站`
+- `看看这个链接是什么`
+
+执行约束：
+
+1. 先同时检测 `url` 和 `domain`（domain 从 URL 提取）。
+2. 任何一个结果为 `malicious` / `error` / `no_check`，立即阻断并输出“已拦截”。
+3. 未输出检测结果前，禁止给出 HTTP 状态、站点介绍、功能分析等正文内容。
+
 ## 版本信息（本地）
 
-- 当前版本：`v1.4.1`
+- 当前版本：`v1.4.2`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -228,3 +249,14 @@ MistEye 结果：malicious | no_match | error | no_check
 证据：<severity/threat_type/confidence/malware 等返回字段>
 动作：<已拦截 / 可继续（附风险）>
 ```
+
+针对 URL/域名问答，必须先输出可见化前置检测块（不允许省略）：
+
+```text
+[前置检测]
+URL 检测：<malicious|no_match|error|no_check>
+Domain 检测：<malicious|no_match|error|no_check>
+前置结论：<已拦截 / 可继续（附风险）>
+```
+
+只有 `前置结论=可继续` 时，才允许继续输出“网站信息/HTTP 状态/功能介绍”等正文。
