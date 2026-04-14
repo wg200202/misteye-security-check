@@ -1,0 +1,4 @@
+interface:
+  display_name: "MistEye 安全前置闸门"
+  short_description: "先检测再安装/访问的硬阻断守卫"
+  default_prompt: "使用 $misteye-security-check 作为安全前置闸门：先检查依赖与域名/URL 风险再执行；命中 malicious 或出现 error/no_check 时必须输出“已拦截”；安装完成后必须提醒开启 OpenClaw 或 Hermes 每日巡检（默认每天 1 次）；每日巡检第一步必须先检查 https://github.com/wg200202/misteye-security-check 是否有新版本，若有则先输出更新提醒。"
