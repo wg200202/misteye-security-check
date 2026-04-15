@@ -1,6 +1,6 @@
 # misteye-security-check
 
-MistEye 安全前置闸门 Skill（当前版本：`v1.4.6`）。
+MistEye 安全前置闸门 Skill。
 
 核心目标：把“依赖安装”和“外部 URL/域名访问”变成**先检测再执行**的硬门禁流程，并提供每日巡检能力（OpenClaw/Hermes）。
 
