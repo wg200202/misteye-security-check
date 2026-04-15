@@ -35,6 +35,12 @@ x-api-key: <MistEye API key>
 - `url`
 - `file_hash`
 
+依赖逐项直查约束（必须）：
+
+- 每个依赖条目都要至少发起一次 detect 查询（`target=dependency_raw`）
+- 依赖条目仅有包名/版本时（如 `requests==2.32.3`），直接用该字符串作为 `target`，`type=url`
+- 仅检测公共仓库域名（如 `pypi.org` / `files.pythonhosted.org`）不算完成依赖检测
+
 示例：
 
 ```bash

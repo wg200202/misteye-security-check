@@ -108,7 +108,9 @@ unset MISTEYE_API_KEY
 - 每个对象必须有来源证据（文件路径 + 行号或字段路径）
 - 禁止用预置生态域名清单补全（例如默认加入 `pypi.org`、`npmjs.org` 等）
 - 禁止只检测 `pypi.org/files.pythonhosted.org` 这类公共域名来宣称“依赖已扫描”
-- 巡检提取采用两阶段：先提取原文对象；若仅有包名则直接用依赖字符串本身查询（例如 `requests==2.32.3`）
+- 每个依赖条目都必须先做一次 `dependency_raw` 直查（例如 `requests==2.32.3`）
+- 只有依赖原文存在显式 url/domain/file_hash 时，才追加这些对象检测（不能替代 `dependency_raw`）
+- 硬约束：`dependency_raw_detect_count >= dependency_item_count`，否则必须输出 `【巡检覆盖不足告警】`
 - 只有空值/注释/异常损坏等无法形成有效依赖字符串时，才计入 `unresolved_source`
 
 ## 8. 任务模板（简版）
@@ -122,7 +124,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "shared" \
-  --message "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明并调用 MistEye detect；输出统计（依赖文件数、检测对象数、malicious、error/no_check）。网络或凭据不可用时输出告警并标记 degraded。" \
+  --message "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明。必须逐项解析 dependency_id，并对每个依赖先执行 detect(target=dependency_raw)；若依赖原文存在显式 url/domain/file_hash 再追加检测。仅检测公共仓库域名不算完成。输出 dependency_item_count 与 dependency_raw_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。网络或凭据不可用时输出告警并标记 degraded。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -134,7 +136,7 @@ openclaw cron add \
 
 ```bash
 hermes cron create "0 3 * * *" \
-  "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明并调用 MistEye detect；输出统计。网络或凭据不可用时输出告警并标记 degraded。" \
+  "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明。必须逐项解析 dependency_id，并对每个依赖先执行 detect(target=dependency_raw)；若依赖原文存在显式 url/domain/file_hash 再追加检测。仅检测公共仓库域名不算完成。输出 dependency_item_count 与 dependency_raw_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。网络或凭据不可用时输出告警并标记 degraded。" \
   --name "misteye-dependency-patrol" \
   --deliver origin
 ```
