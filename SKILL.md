@@ -2,7 +2,7 @@
 name: misteye-security-check
 description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.9"
+  version: "1.4.10"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -46,7 +46,7 @@ metadata:
 
 ## 版本信息（本地）
 
-- 当前版本：`v1.4.9`
+- 当前版本：`v1.4.10`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -139,6 +139,8 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 
 - 直接告知当前检测未完成，属于高风险未确认状态
 - 引导用户提供 key 或设置 `MISTEYE_API_KEY`
+- 明确引导用户到 `https://app.misteye.io/api-keys` 获取/管理 API key
+- 若用户尚未注册 MistEye，先完成注册，再到上述页面创建 key
 - 不允许跳过检测继续执行高风险动作
 
 ## 阻断决策矩阵
@@ -201,6 +203,7 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 - 文件安全要求：权限必须为 `600`（仅当前用户可读写）。
 - 若成功从文件读取，需在当前巡检会话中导出 `MISTEYE_API_KEY` 后再调用 MistEye API。
 - 若凭据仍不可用，必须输出 `【凭据缺失告警】`，并将 MistEye 检测标记为 `degraded`（不可标记成功）。
+- 若凭据缺失，提醒用户前往 `https://app.misteye.io/api-keys` 获取 key（未注册则先注册）。
 - 安全红线：禁止把 API Key 明文写进 cron payload、message、聊天日志、命令历史。
 
 推荐一次性初始化（避免在 cron 中明文）：

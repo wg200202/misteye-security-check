@@ -13,6 +13,12 @@ Content-Type: application/json
 x-api-key: <MistEye API key>
 ```
 
+如果没有 API key：
+
+- 前往 `https://app.misteye.io/api-keys` 获取或管理 key
+- 如果还没有账号，先注册 MistEye，再创建 API key
+- 未获取 key 前，检测应按高风险未确认处理（`error/no_check` -> 阻断）
+
 请求体：
 
 ```json
