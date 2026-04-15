@@ -1,6 +1,6 @@
 # misteye-security-check
 
-MistEye 安全前置闸门 Skill（当前版本：`v1.4.5`）。
+MistEye 安全前置闸门 Skill（当前版本：`v1.4.6`）。
 
 核心目标：把“依赖安装”和“外部 URL/域名访问”变成**先检测再执行**的硬门禁流程，并提供每日巡检能力（OpenClaw/Hermes）。
 
@@ -56,6 +56,12 @@ URL 场景必须：
 5. 新版本提醒（如有）
 6. 常规巡检摘要
 
+巡检覆盖率要求（防漏扫）：
+
+- 必须先枚举全部已安装 Skill/MCP 目录，再逐目录扫描依赖文件
+- 报告中必须给出：安装目录总数、已扫描目录数、依赖文件总数、成功解析文件数、失败文件数
+- 若覆盖不足或解析失败，必须输出告警
+
 ## 5. 网络受限与降级策略（重点）
 
 如果你在 `isolated` 会话里运行 cron，经常会遇到网络或环境变量不继承问题。
@@ -65,6 +71,7 @@ URL 场景必须：
 - 网络不通 -> 输出 `【网络连通性告警】`，标记 `degraded`
 - 凭据缺失 -> 输出 `【凭据缺失告警】`，标记 `degraded`
 - `degraded` 下允许继续做本地依赖文件统计，但**禁止伪造“检测成功”**
+- `no_match` 仅表示未命中情报库，禁止写成“Clean/无风险/安全通过”
 
 OpenClaw 默认推荐用 `--session "shared"` 跑该任务，`isolated` 仅作为备选模式。
 
@@ -89,7 +96,14 @@ unset MISTEYE_API_KEY
 3. `$HOME/.openclaw/credentials/misteye_api_key`
 4. `$HOME/.config/misteye/api_key`
 
-## 7. 任务模板（简版）
+## 7. 提取规则（防误检）
+
+- 检测对象只能从“实际扫描到的依赖文件原文”提取
+- 每个对象必须有来源证据（文件路径 + 行号或字段路径）
+- 禁止用预置生态域名清单补全（例如默认加入 `pypi.org`、`npmjs.org` 等）
+- 只有包名但无 URL/domain/hash 来源的依赖，必须计入 `unresolved_source`，不得伪装为检测通过
+
+## 8. 任务模板（简版）
 
 ### OpenClaw（推荐 shared）
 
@@ -117,9 +131,8 @@ hermes cron create "0 3 * * *" \
   --deliver origin
 ```
 
-## 8. 相关文件
+## 9. 相关文件
 
 - 规则主文件：`SKILL.md`
 - API 说明：`references/api.md`
 - UI 元数据：`agents/openai.yaml`
-

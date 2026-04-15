@@ -2,7 +2,7 @@
 name: misteye-security-check
 description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.5"
+  version: "1.4.6"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -46,7 +46,7 @@ metadata:
 
 ## 版本信息（本地）
 
-- 当前版本：`v1.4.5`
+- 当前版本：`v1.4.6`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -207,6 +207,10 @@ unset MISTEYE_API_KEY
   - `~/.agents/skills`
   - `~/.codex/skills`
   - `$CODEX_HOME/skills`
+- 覆盖率要求（防漏扫）：
+  - 必须先枚举巡检目录下所有已安装 Skill/MCP 目录，再逐目录扫描依赖文件。
+  - 输出必须包含：`已安装目录总数`、`已扫描目录数`、`发现依赖文件总数`、`成功解析文件数`、`解析失败文件数`。
+  - 若 `已扫描目录数 < 已安装目录总数` 或存在解析失败文件，必须输出 `【巡检覆盖不足告警】` 并附失败清单。
 - 只扫描依赖声明文件，不扫描 Skill/MCP 本体逻辑：
   - Python: `requirements*.txt`, `pyproject.toml`, `Pipfile`, `poetry.lock`
   - JS/TS: `package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`
@@ -220,16 +224,22 @@ unset MISTEYE_API_KEY
   - URL（`type=url`）
   - 域名（`type=domain`）
   - 文件哈希（`type=file_hash`，若存在）
+- 提取约束（防误检）：
+  - 仅允许从“扫描到的依赖文件原文”中提取对象；每个对象必须有来源证据（文件路径 + 行号或字段路径）。
+  - 禁止使用预置生态域名清单做补全（例如默认塞入 `pypi.org`、`npmjs.org`、`crates.io` 等），除非这些值确实出现在扫描文件中。
+  - 若依赖项只有包名、没有可提取的 URL/domain/hash 来源，必须计入 `no_check`（原因：`unresolved_source`），不得伪装成已检测通过。
 - 对每个对象调用 MistEye detect。
 - 巡检输出必须包含统计：
   - 扫描到的依赖文件数
   - 提取的可检测对象数（按 url/domain/file_hash 分组）
+  - `unresolved_source` 数量（无法映射到 url/domain/file_hash 的依赖）
   - `malicious` 命中数与对象清单
   - `error/no_check` 数量
 - 巡检处理策略：
   - `malicious`：输出 `【依赖巡检高危告警】`，要求立即人工复核并暂停相关安装/访问流程
   - `error/no_check`：输出 `【依赖巡检未完成提醒】`，要求补检，不得宣称“安全”
   - `no_match`：仅表示未命中情报库，继续巡检并附风险提示
+  - `no_match` 语义约束：禁止写“Clean/安全通过/无风险”，只能写“未命中情报库（仍需风险提示）”
 
 推荐模板 A（OpenClaw）：
 
@@ -240,7 +250,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "shared" \
-  --message "按顺序执行每日巡检：1) 先做网络连通性预检（app-api.misteye.io 与 raw.githubusercontent.com）；2) 做 MISTEYE_API_KEY 凭据预检（先读环境变量，缺失则从 ~/.openclaw/credentials/misteye_api_key 或 $OPENCLAW_STATE_DIR/credentials/misteye_api_key 加载）；3) 再做版本检查；4) 巡检已安装 Skill/MCP 的依赖声明文件并调用 MistEye detect；5) 输出统计。若网络不通输出【网络连通性告警】；若凭据缺失输出【凭据缺失告警】；两者均标记 degraded，不得伪造成功。" \
+  --message "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 依赖巡检（先枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件）；5) 仅从依赖文件原文提取 url/domain/file_hash（每个对象必须带来源证据：文件+行号/字段），禁止预置域名补全；6) 对提取对象调用 MistEye detect；7) 输出覆盖率与结果统计（安装目录总数/已扫描目录数/依赖文件总数/成功解析数/失败数/对象分组数/unresolved_source/malicious/error/no_check）。若覆盖不足输出【巡检覆盖不足告警】；若网络不通输出【网络连通性告警】；若凭据缺失输出【凭据缺失告警】；均标记 degraded。`no_match` 禁止写成安全通过。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -257,7 +267,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "isolated" \
-  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，尝试从 ~/.openclaw/credentials/misteye_api_key 或 $OPENCLAW_STATE_DIR/credentials/misteye_api_key 读取）；若网络或凭据任一不可用，立即输出【网络连通性告警】或【凭据缺失告警】并进入受限模式（仅做本地依赖文件统计，版本/API 检测标记 degraded）；若均可用再执行版本检查与 MistEye 依赖巡检。" \
+  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，尝试从 ~/.openclaw/credentials/misteye_api_key 或 $OPENCLAW_STATE_DIR/credentials/misteye_api_key 读取）；随后枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件，仅从文件原文提取 url/domain/file_hash（必须附证据，禁止预置域名补全）；输出覆盖率与结果统计。若网络或凭据任一不可用，输出对应告警并进入受限模式（仅本地文件覆盖率统计，外部检测标记 degraded）。`no_match` 禁止写成安全通过。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -269,7 +279,7 @@ openclaw cron add \
 
 ```bash
 hermes cron create "0 3 * * *" \
-  "按顺序执行每日巡检：1) 先做网络连通性预检（app-api.misteye.io 与 raw.githubusercontent.com）；2) 做 MISTEYE_API_KEY 凭据预检（先读环境变量，缺失则从本地受控文件读取）；3) 再做版本检查；4) 巡检已安装 Skill/MCP 的依赖声明文件并调用 MistEye detect；5) 输出统计。若网络不通输出【网络连通性告警】；若凭据缺失输出【凭据缺失告警】；两者均标记 degraded，不得伪造成功。" \
+  "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 仅从依赖文件原文提取 url/domain/file_hash（每项要有来源证据，禁止预置域名补全）；6) 调用 MistEye detect 并输出覆盖率与结果统计（含 unresolved_source）；7) 若网络/凭据/覆盖不足，输出对应告警并标记 degraded；`no_match` 禁止写成安全通过。" \
   --name "misteye-dependency-patrol" \
   --deliver origin
 ```
@@ -277,7 +287,7 @@ hermes cron create "0 3 * * *" \
 推荐模板 C（Hermes 聊天命令）：
 
 ```text
-/cron add "0 3 * * *" "按顺序执行每日巡检：1) 先做网络连通性预检（app-api.misteye.io 与 raw.githubusercontent.com）；2) 做 MISTEYE_API_KEY 凭据预检（先读环境变量，缺失则从本地受控文件读取）；3) 再做版本检查；4) 巡检已安装 Skill/MCP 的依赖声明文件并调用 MistEye detect；5) 输出统计。若网络不通输出【网络连通性告警】；若凭据缺失输出【凭据缺失告警】；两者均标记 degraded，不得伪造成功。" --name "misteye-dependency-patrol" --deliver origin
+/cron add "0 3 * * *" "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 仅从依赖文件原文提取 url/domain/file_hash（每项要有来源证据，禁止预置域名补全）；6) 调用 MistEye detect 并输出覆盖率与结果统计（含 unresolved_source）；7) 若网络/凭据/覆盖不足，输出对应告警并标记 degraded；`no_match` 禁止写成安全通过。" --name "misteye-dependency-patrol" --deliver origin
 ```
 
 Hermes 使用前置条件（必须提醒）：
@@ -350,3 +360,25 @@ Domain 检测：<malicious|no_match|error|no_check>
 ```
 
 只有 `前置结论=可继续` 时，才允许继续输出“网站信息/HTTP 状态/功能介绍”等正文。
+
+针对“每日依赖巡检”输出，必须额外包含以下两块：
+
+1. 覆盖率块
+
+```text
+[巡检覆盖率]
+已安装目录总数：<n>
+已扫描目录数：<n>
+依赖文件总数：<n>
+成功解析文件数：<n>
+解析失败文件数：<n>
+覆盖结论：<正常 / 巡检覆盖不足>
+```
+
+2. 检测对象证据块（至少列出前若干条）
+
+```text
+[检测对象证据]
+<type> <target> <- <file_path>:<line_or_field>
+...
+```
