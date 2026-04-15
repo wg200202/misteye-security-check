@@ -2,7 +2,7 @@
 name: misteye-security-check
 description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.6"
+  version: "1.4.7"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -46,7 +46,7 @@ metadata:
 
 ## 版本信息（本地）
 
-- 当前版本：`v1.4.6`
+- 当前版本：`v1.4.7`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -65,11 +65,32 @@ Skill/MCP 安装专项规则（必须）：
 
 1. 仅扫描依赖声明文件与依赖来源对象；不对 Skill/MCP 的 `SKILL.md`、提示词文本、脚本逻辑本体做恶意判定。
 2. 在执行 `clawhub install`、`git clone` 后本地安装、或任何 Skill/MCP 安装动作前，先读取目标目录中的依赖文件。
-3. 从依赖文件中提取可检测对象：依赖源域名、下载 URL、文件哈希（若有）。
-4. 对每个可检测对象调用 MistEye `detect`。
-5. 任一对象命中 `malicious`，立即阻断安装并输出“已拦截”。
-6. 若依赖项无法形成可检测对象（无法映射到 domain/url/file_hash），按 `no_check` 处理并阻断（“已拦截（未完成检测）”）。
-7. 仅当依赖相关对象全部完成检测且未命中阻断条件时，才允许继续安装 Skill/MCP。
+3. 必须“逐项解析依赖条目”（不是只看文件存在与否），为每个依赖条目生成唯一 `dependency_id`。
+4. 从每个依赖条目提取可检测对象：依赖源域名、下载 URL、文件哈希（若有）。
+5. 若依赖条目只有包名/版本，没有显式来源，必须按生态构造“包级 URL”再检测（例如 Python `requests==2.32.3` -> `https://pypi.org/project/requests/2.32.3/`）。
+6. 对每个依赖条目的检测对象调用 MistEye `detect`。
+7. 任一对象命中 `malicious`，立即阻断安装并输出“已拦截”。
+8. 任一依赖条目无法形成可检测对象（包括无法构造包级 URL），按 `no_check` 处理并阻断（“已拦截（未完成检测）”）。
+9. 仅当“每个依赖条目”都完成检测且未命中阻断条件时，才允许继续安装 Skill/MCP。
+
+包级 URL 构造规则（依赖仅有包名时）：
+
+- Python: `https://pypi.org/project/<name>/<version>/`（无版本则 `https://pypi.org/project/<name>/`）
+- npm: `https://registry.npmjs.org/<name>`
+- Rust(crate): `https://crates.io/crates/<name>`
+- Ruby: `https://rubygems.org/gems/<name>`
+- PHP(Composer): `https://packagist.org/packages/<name>`
+- .NET(NuGet): `https://api.nuget.org/v3-flatcontainer/<name-lower>/index.json`
+
+安装前输出要求（必须）：
+
+- 必须输出 `依赖逐项扫描表`，至少包含：
+  - `dependency_id`
+  - `dependency_raw`（原始依赖字符串）
+  - `evidence`（文件路径 + 行号/字段）
+  - `targets`（该条目对应的 url/domain/hash）
+  - `result`（malicious/no_match/error/no_check）
+- 禁止用“仅检查公共仓库域名（如 pypi.org）”代替逐项依赖扫描。
 
 依赖检查覆盖清单（全生态）：
 
@@ -227,6 +248,7 @@ unset MISTEYE_API_KEY
 - 提取约束（防误检）：
   - 仅允许从“扫描到的依赖文件原文”中提取对象；每个对象必须有来源证据（文件路径 + 行号或字段路径）。
   - 禁止使用预置生态域名清单做补全（例如默认塞入 `pypi.org`、`npmjs.org`、`crates.io` 等），除非这些值确实出现在扫描文件中。
+  - 禁止只检测“仓库公共域名”来代替依赖逐项扫描（例如仅检测 `pypi.org` / `files.pythonhosted.org`）。
   - 若依赖项只有包名、没有可提取的 URL/domain/hash 来源，必须计入 `no_check`（原因：`unresolved_source`），不得伪装成已检测通过。
 - 对每个对象调用 MistEye detect。
 - 巡检输出必须包含统计：

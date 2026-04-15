@@ -38,6 +38,7 @@ URL 场景必须：
 - 扫描对象来源：依赖声明文件（`requirements*.txt`、`package.json`、`go.mod`、`Cargo.toml` 等）
 - 提取对象：`url` / `domain` / `file_hash`
 - 不扫描对象：`SKILL.md` 文本内容、提示词文案、脚本业务逻辑本体
+- 安装阶段必须“逐项解析依赖条目”（dependency_id），不能只检测公共仓库域名替代依赖扫描
 
 ## 4. 每日巡检（首次安装时提醒开启）
 
@@ -101,6 +102,7 @@ unset MISTEYE_API_KEY
 - 检测对象只能从“实际扫描到的依赖文件原文”提取
 - 每个对象必须有来源证据（文件路径 + 行号或字段路径）
 - 禁止用预置生态域名清单补全（例如默认加入 `pypi.org`、`npmjs.org` 等）
+- 禁止只检测 `pypi.org/files.pythonhosted.org` 这类公共域名来宣称“依赖已扫描”
 - 只有包名但无 URL/domain/hash 来源的依赖，必须计入 `unresolved_source`，不得伪装为检测通过
 
 ## 8. 任务模板（简版）
