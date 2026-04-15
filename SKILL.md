@@ -2,7 +2,7 @@
 name: misteye-security-check
 description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.7"
+  version: "1.4.9"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -46,7 +46,7 @@ metadata:
 
 ## 版本信息（本地）
 
-- 当前版本：`v1.4.7`
+- 当前版本：`v1.4.9`
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
 - 上游版本来源（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
@@ -67,20 +67,20 @@ Skill/MCP 安装专项规则（必须）：
 2. 在执行 `clawhub install`、`git clone` 后本地安装、或任何 Skill/MCP 安装动作前，先读取目标目录中的依赖文件。
 3. 必须“逐项解析依赖条目”（不是只看文件存在与否），为每个依赖条目生成唯一 `dependency_id`。
 4. 从每个依赖条目提取可检测对象：依赖源域名、下载 URL、文件哈希（若有）。
-5. 若依赖条目只有包名/版本，没有显式来源，必须按生态构造“包级 URL”再检测（例如 Python `requests==2.32.3` -> `https://pypi.org/project/requests/2.32.3/`）。
+5. 若依赖条目只有包名/版本，没有显式来源，直接用 `dependency_raw` 作为检测目标进行查询（例如 `requests==2.32.3`）。
 6. 对每个依赖条目的检测对象调用 MistEye `detect`。
 7. 任一对象命中 `malicious`，立即阻断安装并输出“已拦截”。
-8. 任一依赖条目无法形成可检测对象（包括无法构造包级 URL），按 `no_check` 处理并阻断（“已拦截（未完成检测）”）。
+8. 任一依赖条目无法形成可检测对象（例如空条目、注释条目、无法解析的异常格式），按 `no_check` 处理并阻断（“已拦截（未完成检测）”）。
 9. 仅当“每个依赖条目”都完成检测且未命中阻断条件时，才允许继续安装 Skill/MCP。
 
-包级 URL 构造规则（依赖仅有包名时）：
+依赖直查规则（依赖仅有包名时）：
 
-- Python: `https://pypi.org/project/<name>/<version>/`（无版本则 `https://pypi.org/project/<name>/`）
-- npm: `https://registry.npmjs.org/<name>`
-- Rust(crate): `https://crates.io/crates/<name>`
-- Ruby: `https://rubygems.org/gems/<name>`
-- PHP(Composer): `https://packagist.org/packages/<name>`
-- .NET(NuGet): `https://api.nuget.org/v3-flatcontainer/<name-lower>/index.json`
+- 检测目标直接使用 `dependency_raw`
+- `type` 选择优先级：
+  - 若 `dependency_raw` 可识别为 URL：`type=url`
+  - 若可识别为域名：`type=domain`
+  - 若可识别为哈希：`type=file_hash`
+  - 其余格式：默认 `type=url` 直接查询
 
 安装前输出要求（必须）：
 
@@ -246,14 +246,16 @@ unset MISTEYE_API_KEY
   - 域名（`type=domain`）
   - 文件哈希（`type=file_hash`，若存在）
 - 提取约束（防误检）：
-  - 仅允许从“扫描到的依赖文件原文”中提取对象；每个对象必须有来源证据（文件路径 + 行号或字段路径）。
+  - 第一阶段：优先从“扫描到的依赖文件原文”提取对象（url/domain/hash）；每个对象必须有来源证据（文件路径 + 行号或字段路径）。
+  - 第二阶段：若某依赖条目只有包名/版本、无直接来源对象，必须直接使用 `dependency_raw` 作为检测目标（`source_kind=dependency_raw`）并执行检测。
   - 禁止使用预置生态域名清单做补全（例如默认塞入 `pypi.org`、`npmjs.org`、`crates.io` 等），除非这些值确实出现在扫描文件中。
   - 禁止只检测“仓库公共域名”来代替依赖逐项扫描（例如仅检测 `pypi.org` / `files.pythonhosted.org`）。
-  - 若依赖项只有包名、没有可提取的 URL/domain/hash 来源，必须计入 `no_check`（原因：`unresolved_source`），不得伪装成已检测通过。
+  - 只有在“dependency_raw 无法提取或无效（空值/注释/异常损坏）”的情况下，才允许计入 `no_check`（原因：`unresolved_source`），不得伪装成已检测通过。
 - 对每个对象调用 MistEye detect。
 - 巡检输出必须包含统计：
   - 扫描到的依赖文件数
   - 提取的可检测对象数（按 url/domain/file_hash 分组）
+  - 依赖直查检测对象数（`dependency_raw`）
   - `unresolved_source` 数量（无法映射到 url/domain/file_hash 的依赖）
   - `malicious` 命中数与对象清单
   - `error/no_check` 数量
@@ -272,7 +274,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "shared" \
-  --message "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 依赖巡检（先枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件）；5) 仅从依赖文件原文提取 url/domain/file_hash（每个对象必须带来源证据：文件+行号/字段），禁止预置域名补全；6) 对提取对象调用 MistEye detect；7) 输出覆盖率与结果统计（安装目录总数/已扫描目录数/依赖文件总数/成功解析数/失败数/对象分组数/unresolved_source/malicious/error/no_check）。若覆盖不足输出【巡检覆盖不足告警】；若网络不通输出【网络连通性告警】；若凭据缺失输出【凭据缺失告警】；均标记 degraded。`no_match` 禁止写成安全通过。" \
+  --message "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 依赖巡检（先枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件）；5) 先从依赖原文提取 url/domain/file_hash，再对仅有包名的条目直接使用 dependency_raw 作为检测目标（source_kind=dependency_raw）；6) 对对象调用 MistEye detect；7) 输出覆盖率与结果统计（安装目录总数/已扫描目录数/依赖文件总数/成功解析数/失败数/对象分组数/dependency_raw/unresolved_source/malicious/error/no_check）。若覆盖不足输出【巡检覆盖不足告警】；若网络不通输出【网络连通性告警】；若凭据缺失输出【凭据缺失告警】；均标记 degraded。`no_match` 禁止写成安全通过。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -289,7 +291,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "isolated" \
-  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，尝试从 ~/.openclaw/credentials/misteye_api_key 或 $OPENCLAW_STATE_DIR/credentials/misteye_api_key 读取）；随后枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件，仅从文件原文提取 url/domain/file_hash（必须附证据，禁止预置域名补全）；输出覆盖率与结果统计。若网络或凭据任一不可用，输出对应告警并进入受限模式（仅本地文件覆盖率统计，外部检测标记 degraded）。`no_match` 禁止写成安全通过。" \
+  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，尝试从 ~/.openclaw/credentials/misteye_api_key 或 $OPENCLAW_STATE_DIR/credentials/misteye_api_key 读取）；随后枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件，先提取原文中的 url/domain/file_hash，再对仅包名条目直接使用 dependency_raw 查询（必须附证据，禁止预置域名补全）；输出覆盖率与结果统计。若网络或凭据任一不可用，输出对应告警并进入受限模式（仅本地文件覆盖率统计，外部检测标记 degraded）。`no_match` 禁止写成安全通过。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -301,7 +303,7 @@ openclaw cron add \
 
 ```bash
 hermes cron create "0 3 * * *" \
-  "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 仅从依赖文件原文提取 url/domain/file_hash（每项要有来源证据，禁止预置域名补全）；6) 调用 MistEye detect 并输出覆盖率与结果统计（含 unresolved_source）；7) 若网络/凭据/覆盖不足，输出对应告警并标记 degraded；`no_match` 禁止写成安全通过。" \
+  "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 先提取原文中的 url/domain/file_hash，再对仅包名条目直接使用 dependency_raw（source_kind=dependency_raw）；6) 调用 MistEye detect 并输出覆盖率与结果统计（含 dependency_raw 与 unresolved_source）；7) 若网络/凭据/覆盖不足，输出对应告警并标记 degraded；`no_match` 禁止写成安全通过。" \
   --name "misteye-dependency-patrol" \
   --deliver origin
 ```
@@ -309,7 +311,7 @@ hermes cron create "0 3 * * *" \
 推荐模板 C（Hermes 聊天命令）：
 
 ```text
-/cron add "0 3 * * *" "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 仅从依赖文件原文提取 url/domain/file_hash（每项要有来源证据，禁止预置域名补全）；6) 调用 MistEye detect 并输出覆盖率与结果统计（含 unresolved_source）；7) 若网络/凭据/覆盖不足，输出对应告警并标记 degraded；`no_match` 禁止写成安全通过。" --name "misteye-dependency-patrol" --deliver origin
+/cron add "0 3 * * *" "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 先提取原文中的 url/domain/file_hash，再对仅包名条目直接使用 dependency_raw（source_kind=dependency_raw）；6) 调用 MistEye detect 并输出覆盖率与结果统计（含 dependency_raw 与 unresolved_source）；7) 若网络/凭据/覆盖不足，输出对应告警并标记 degraded；`no_match` 禁止写成安全通过。" --name "misteye-dependency-patrol" --deliver origin
 ```
 
 Hermes 使用前置条件（必须提醒）：
@@ -401,6 +403,6 @@ Domain 检测：<malicious|no_match|error|no_check>
 
 ```text
 [检测对象证据]
-<type> <target> <- <file_path>:<line_or_field>
+<type> <target> <- <file_path>:<line_or_field> [source_kind=raw|dependency_raw]
 ...
 ```
