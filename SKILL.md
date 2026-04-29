@@ -2,7 +2,7 @@
 name: misteye-security-check
 description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.11"
+  version: "1.4.17"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -44,14 +44,16 @@ metadata:
 2. 任何一个结果为 `malicious` / `error` / `no_check`，立即阻断并输出“已拦截”。
 3. 未输出检测结果前，禁止给出 HTTP 状态、站点介绍、功能分析等正文内容。
 
-## 版本信息（本地）
+## GitHub 更新来源（巡检拉取地址）
 
-- 当前版本：`v1.4.11`
+巡检做版本检查时，必须从以下 GitHub 地址拉取最新 `SKILL.md`，不得猜测其他仓库或分支：
+
 - 上游仓库：`https://github.com/wg200202/misteye-security-check`
-- 上游版本来源（按顺序回退）：
+- 最新下载地址候选（按顺序回退）：
   1) `https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md`
   2) `https://raw.githubusercontent.com/wg200202/misteye-security-check/master/SKILL.md`
-- 版本比较规则：使用语义化版本（`major.minor.patch`）比较；远端高于本地即判定为“有新版本”。
+
+命中的 raw URL 同时作为巡检输出里的 `检查来源` 和 `最新下载地址`。
 
 ## 优先级 0：依赖与域名访问前置检查
 
@@ -198,33 +200,48 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 - 凭据加载顺序：
   1) 直接读取环境变量 `MISTEYE_API_KEY`
   2) 若为空，尝试从本地受控文件读取（按顺序）：
-     - `${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/credentials/misteye_api_key`
-     - `$HOME/.openclaw/credentials/misteye_api_key`
+     - `${MISTEYE_CONFIG_DIR}/api_key`（当 `MISTEYE_CONFIG_DIR` 已设置）
      - `$HOME/.config/misteye/api_key`
 - 文件安全要求：权限必须为 `600`（仅当前用户可读写）。
 - 若成功从文件读取，需在当前巡检会话中导出 `MISTEYE_API_KEY` 后再调用 MistEye API。
 - 若凭据仍不可用，必须输出 `【凭据缺失告警】`，并将 MistEye 检测标记为 `degraded`（不可标记成功）。
 - 若凭据缺失，提醒用户前往 `https://app.misteye.io/api-keys` 获取 key（未注册则先注册）。
 - 安全红线：禁止把 API Key 明文写进 cron payload、message、聊天日志、命令历史。
+- OpenClaw 与 Hermes 只作为定时任务执行器；不得把新凭据写入 OpenClaw/Hermes 私有目录。
 
 推荐一次性初始化（避免在 cron 中明文）：
 
 ```bash
-mkdir -p ~/.openclaw/credentials
+mkdir -p "${MISTEYE_CONFIG_DIR:-$HOME/.config/misteye}"
 read -s MISTEYE_API_KEY && echo
-printf '%s' "$MISTEYE_API_KEY" > ~/.openclaw/credentials/misteye_api_key
-chmod 600 ~/.openclaw/credentials/misteye_api_key
+printf '%s' "$MISTEYE_API_KEY" > "${MISTEYE_CONFIG_DIR:-$HOME/.config/misteye}/api_key"
+chmod 600 "${MISTEYE_CONFIG_DIR:-$HOME/.config/misteye}/api_key"
 unset MISTEYE_API_KEY
 ```
 
 版本更新检查规则（必须）：
 
 - 读取本地版本：当前技能 `SKILL.md` frontmatter 中 `metadata.version`
-- 读取远端版本：优先 `main/SKILL.md`，失败再尝试 `master/SKILL.md`
+- 读取远端版本：按“GitHub 更新来源（巡检拉取地址）”中的最新下载地址候选顺序尝试，并解析远端 `metadata.version`
+- 仓库地址：使用“GitHub 更新来源（巡检拉取地址）”中的上游仓库
+- 版本比较规则：使用语义化版本（`major.minor.patch`）比较；远端高于本地即判定为“有新版本”
 - 比较结果处理：
-  - 远端版本 > 本地版本：输出 `【版本更新提醒】`，包含本地版本、远端版本、仓库地址
+  - 远端版本 > 本地版本：输出 `【版本更新提醒】`，包含本地版本、远端版本、仓库地址、最新下载地址
   - 远端版本 = 本地版本：输出“版本已是最新”
   - 版本检查失败（网络/解析失败）：输出 `【版本检查失败提醒】`，继续执行安全巡检
+
+版本检查输出模板（巡检时必须包含）：
+
+```text
+[版本检查]
+本地版本：<本地 SKILL.md frontmatter metadata.version>
+远端版本：<远端 SKILL.md frontmatter metadata.version | unknown>
+上游仓库：<GitHub 更新来源中的上游仓库>
+检查来源：<命中的 GitHub raw URL | 全部失败>
+最新下载地址：<命中的 GitHub raw URL | unknown>
+版本结论：<有新版本 / 版本已是最新 / 版本检查失败>
+动作：<先提醒更新 / 继续巡检 / 标记 degraded 后继续本地统计>
+```
 
 已安装 Skill/MCP 依赖巡检规则（必须）：
 
@@ -297,7 +314,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "isolated" \
-  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，尝试从 ~/.openclaw/credentials/misteye_api_key 或 $OPENCLAW_STATE_DIR/credentials/misteye_api_key 读取）；随后枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件。必须对每个 dependency_id 先执行 detect(target=dependency_raw)，再对原文存在的 url/domain/file_hash 做补充检测。输出 dependency_item_count 与 dependency_raw_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。若网络或凭据任一不可用，输出对应告警并进入受限模式（仅本地覆盖率统计，外部检测标记 degraded）。`no_match` 禁止写成安全通过。" \
+  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，只从 MistEye 专用配置目录读取：默认 ~/.config/misteye/api_key，可用 MISTEYE_CONFIG_DIR 覆盖）；随后枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件。必须对每个 dependency_id 先执行 detect(target=dependency_raw)，再对原文存在的 url/domain/file_hash 做补充检测。输出 dependency_item_count 与 dependency_raw_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。若网络或凭据任一不可用，输出对应告警并进入受限模式（仅本地覆盖率统计，外部检测标记 degraded）。`no_match` 禁止写成安全通过。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
