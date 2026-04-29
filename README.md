@@ -7,15 +7,16 @@ MistEye 安全前置闸门 Skill。
 ## 1. 功能概览
 
 - 唯一检测接口：`POST https://app-api.misteye.io/functions/v1/detect`
-- 检测类型：`ip` / `domain` / `url` / `file_hash`
+- 官方文档：`https://app.misteye.io/api-docs`
+- 检测类型：`ip` / `ip:port` / `domain` / `url` / `email` / `file_hash` / `md5` / `sha1` / `sha256` / `package:*`
 - 高优先级门禁：
   - 依赖安装前检测
   - URL/域名访问前检测
   - Skill/MCP 安装前依赖声明扫描
 - 阻断策略：
-  - `malicious` -> 已拦截
+  - API `safe=false` 或 `matches` 非空 -> 已拦截
   - `error` / `no_check` -> 已拦截（未完成检测）
-  - `no_match` -> 可继续但必须带风险提示
+  - API `safe=true` 且 `matches=[]` -> 可继续但必须带风险提示
 
 ## 2. 前置检测触发规则（防漏检）
 
@@ -36,7 +37,7 @@ URL 场景必须：
 该 Skill 在安装场景中只扫描“依赖安装库相关对象”，**不判定 Skill/MCP 本体是否恶意**。
 
 - 扫描对象来源：依赖声明文件（`requirements*.txt`、`package.json`、`go.mod`、`Cargo.toml` 等）
-- 提取对象：`url` / `domain` / `file_hash`
+- 提取对象：供应链包（优先 `package:*`）以及原文显式出现的 `url` / `domain` / `email` / `hash`
 - 不扫描对象：`SKILL.md` 文本内容、提示词文案、脚本业务逻辑本体
 - 安装阶段必须“逐项解析依赖条目”（dependency_id），不能只检测公共仓库域名替代依赖扫描
 
@@ -72,7 +73,8 @@ URL 场景必须：
 - 网络不通 -> 输出 `【网络连通性告警】`，标记 `degraded`
 - 凭据缺失 -> 输出 `【凭据缺失告警】`，标记 `degraded`
 - `degraded` 下允许继续做本地依赖文件统计，但**禁止伪造“检测成功”**
-- `no_match` 仅表示未命中情报库，禁止写成“Clean/无风险/安全通过”
+- API `safe=true` 且 `matches=[]` 仅表示未命中情报库，禁止写成“Clean/无风险/安全通过”
+- 供应链包未命中时可提示用户是否到对应生态的官方包源/注册表查看包元数据（如 npm registry、PyPI、NuGet、RubyGems、pkg.go.dev、crates.io）；未经用户同意不自动打开或查询
 
 OpenClaw 默认推荐用 `--session "shared"` 跑该任务，`isolated` 仅作为备选模式。OpenClaw 和 Hermes 只作为定时任务执行器，不作为 MistEye API key 的主存储位置。
 
@@ -107,9 +109,9 @@ unset MISTEYE_API_KEY
 - 每个对象必须有来源证据（文件路径 + 行号或字段路径）
 - 禁止用预置生态域名清单补全（例如默认加入 `pypi.org`、`npmjs.org` 等）
 - 禁止只检测 `pypi.org/files.pythonhosted.org` 这类公共域名来宣称“依赖已扫描”
-- 每个依赖条目都必须先做一次 `dependency_raw` 直查（例如 `requests==2.32.3`）
-- 只有依赖原文存在显式 url/domain/file_hash 时，才追加这些对象检测（不能替代 `dependency_raw`）
-- 硬约束：`dependency_raw_detect_count >= dependency_item_count`，否则必须输出 `【巡检覆盖不足告警】`
+- 每个依赖条目都必须先做一次供应链包直查；可识别生态时使用 `package:npm` / `package:pypi` / `package:nuget` / `package:rubygems` / `package:go` / `package:cratesio`
+- 只有依赖原文存在显式 url/domain/email/hash 时，才追加这些对象检测（不能替代供应链包直查）
+- 硬约束：`dependency_package_detect_count >= dependency_item_count`，否则必须输出 `【巡检覆盖不足告警】`
 - 只有空值/注释/异常损坏等无法形成有效依赖字符串时，才计入 `unresolved_source`
 
 ## 8. 任务模板（简版）
@@ -123,7 +125,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "shared" \
-  --message "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明。必须逐项解析 dependency_id，并对每个依赖先执行 detect(target=dependency_raw)；若依赖原文存在显式 url/domain/file_hash 再追加检测。仅检测公共仓库域名不算完成。输出 dependency_item_count 与 dependency_raw_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。网络或凭据不可用时输出告警并标记 degraded。" \
+  --message "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明。必须逐项解析 dependency_id，并对每个依赖先执行供应链包直查（优先 package:* 类型）；若依赖原文存在显式 url/domain/email/hash 再追加检测。仅检测公共仓库域名不算完成。输出 dependency_item_count 与 dependency_package_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。网络或凭据不可用时输出告警并标记 degraded。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -135,7 +137,7 @@ openclaw cron add \
 
 ```bash
 hermes cron create "0 3 * * *" \
-  "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明。必须逐项解析 dependency_id，并对每个依赖先执行 detect(target=dependency_raw)；若依赖原文存在显式 url/domain/file_hash 再追加检测。仅检测公共仓库域名不算完成。输出 dependency_item_count 与 dependency_raw_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。网络或凭据不可用时输出告警并标记 degraded。" \
+  "先做网络连通性预检和 MISTEYE_API_KEY 凭据预检；再做版本检查；再巡检已安装 Skill/MCP 的依赖声明。必须逐项解析 dependency_id，并对每个依赖先执行供应链包直查（优先 package:* 类型）；若依赖原文存在显式 url/domain/email/hash 再追加检测。仅检测公共仓库域名不算完成。输出 dependency_item_count 与 dependency_package_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。网络或凭据不可用时输出告警并标记 degraded。" \
   --name "misteye-dependency-patrol" \
   --deliver origin
 ```

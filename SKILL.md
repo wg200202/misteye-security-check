@@ -1,8 +1,8 @@
 ---
 name: misteye-security-check
-description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。检测命中 `malicious` 或未完成检测（`error`/`no_check`）时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
+description: 这是 MistEye 安全前置闸门技能。触发于依赖安装前风险检测（含 Skill/MCP 依赖清单）、域名或 URL 访问前安全检查、IoC 恶意检测与供应链风险拦截，尤其包含“帮我看一下这个地址/网站”的常见问法。强制使用 `https://app-api.misteye.io/functions/v1/detect`；在依赖与外链场景中优先级最高。API 返回 `safe=false` 或存在 `matches` 时必须阻断并明确“已拦截”；仅在首次安装完成后提醒用户可开启 OpenClaw 或 Hermes 的每日巡检（默认一天一次）。
 metadata:
-  version: "1.4.17"
+  version: "1.4.20"
   upstream_repo: "https://github.com/wg200202/misteye-security-check"
   upstream_skill_candidates:
     - "https://raw.githubusercontent.com/wg200202/misteye-security-check/main/SKILL.md"
@@ -15,7 +15,9 @@ metadata:
 
 - 唯一检测接口：`POST https://app-api.misteye.io/functions/v1/detect`
 - 唯一认证方式：`x-api-key` 请求头（建议使用 `MISTEYE_API_KEY` 环境变量）
-- 唯一检测类型：`ip`、`domain`、`url`、`file_hash`
+- 官方文档：`https://app.misteye.io/api-docs`
+- 当前可用检测类型：`ip`、`ip:port`、`domain`、`url`、`email`、`file_hash`、`md5`、`sha1`、`sha256`、`package:npm`、`package:pypi`、`package:nuget`、`package:rubygems`、`package:go`、`package:cratesio`
+- 官方标记为 Coming Soon 的类型（如 `repo:*`、`extension:*`、`ai-tool:*`、`mobile-app:*`）不得作为硬门禁唯一依据
 - 最高优先级场景：依赖安装前检查、域名或 URL 访问前检查
 - Skill/MCP 安装场景只检查“依赖安装库相关对象”，不对 Skill/MCP 本体做恶意判定
 - 每日巡检第一步：先检查上游仓库是否有新版本，并在发现新版本时强提醒
@@ -41,7 +43,7 @@ metadata:
 执行约束：
 
 1. 先同时检测 `url` 和 `domain`（domain 从 URL 提取）。
-2. 任何一个结果为 `malicious` / `error` / `no_check`，立即阻断并输出“已拦截”。
+2. 任一检测返回 `safe=false`、`matches` 非空、`error` 或 `no_check`，立即阻断并输出“已拦截”。
 3. 未输出检测结果前，禁止给出 HTTP 状态、站点介绍、功能分析等正文内容。
 
 ## GitHub 更新来源（巡检拉取地址）
@@ -68,21 +70,28 @@ Skill/MCP 安装专项规则（必须）：
 1. 仅扫描依赖声明文件与依赖来源对象；不对 Skill/MCP 的 `SKILL.md`、提示词文本、脚本逻辑本体做恶意判定。
 2. 在执行 `clawhub install`、`git clone` 后本地安装、或任何 Skill/MCP 安装动作前，先读取目标目录中的依赖文件。
 3. 必须“逐项解析依赖条目”（不是只看文件存在与否），为每个依赖条目生成唯一 `dependency_id`。
-4. 对每个依赖条目，必须先做一次 `dependency_raw` 直查（例如 `requests==2.32.3`）。
-5. 若依赖条目含显式 URL/域名/哈希，再追加这些对象的检测；追加检测不能替代 `dependency_raw` 直查。
-6. 依赖扫描覆盖率硬约束：`dependency_raw_detect_count >= dependency_item_count`，否则判定 `【巡检覆盖不足告警】` 并阻断。
-7. 任一对象命中 `malicious`，立即阻断安装并输出“已拦截”。
-8. 任一依赖条目无法形成有效 `dependency_raw`（空条目、注释条目、损坏格式），按 `no_check` 处理并阻断（“已拦截（未完成检测）”）。
-9. 仅当“每个依赖条目”都完成检测且未命中阻断条件时，才允许继续安装 Skill/MCP。
+4. 对每个依赖条目，必须先做一次供应链包直查；能识别生态时必须使用 `package:*` 类型（例如 PyPI 用 `package:pypi`、npm 用 `package:npm`）。
+5. 依赖有明确名称和版本时，优先把 target 规范化为 `name@version`；无法规范化时使用依赖原文作为 target，并保留 `dependency_raw` 证据。
+6. 若依赖条目含显式 URL/域名/哈希，再追加这些对象的检测；追加检测不能替代供应链包直查。
+7. 依赖扫描覆盖率硬约束：`dependency_package_detect_count >= dependency_item_count`，否则判定 `【巡检覆盖不足告警】` 并阻断。
+8. 任一对象返回 `safe=false` 或 `matches` 非空，立即阻断安装并输出“已拦截”。
+9. 任一依赖条目无法形成有效检测目标（空条目、注释条目、损坏格式），按 `no_check` 处理并阻断（“已拦截（未完成检测）”）。
+10. 仅当“每个依赖条目”都完成检测且未命中阻断条件时，才允许继续安装 Skill/MCP。
 
 依赖直查规则（依赖仅有包名时）：
 
-- 检测目标直接使用 `dependency_raw`
+- 检测目标优先使用供应链包 identity（`name@version`），并保留 `dependency_raw` 作为证据
 - `type` 选择优先级：
+  - Python 依赖：`type=package:pypi`
+  - npm/yarn/pnpm 依赖：`type=package:npm`
+  - NuGet 依赖：`type=package:nuget`
+  - RubyGems 依赖：`type=package:rubygems`
+  - Go module 依赖：`type=package:go`
+  - Cargo/crates.io 依赖：`type=package:cratesio`
   - 若 `dependency_raw` 可识别为 URL：`type=url`
   - 若可识别为域名：`type=domain`
-  - 若可识别为哈希：`type=file_hash`
-  - 其余格式：默认 `type=url` 直接查询
+  - 若可识别为哈希：优先选择 `md5` / `sha1` / `sha256`，无法区分时用 `file_hash`
+  - 其余格式：使用最接近的 `package:*` 类型；无法识别生态时标记 `no_check`，不得伪装成已检测
 
 安装前输出要求（必须）：
 
@@ -90,8 +99,12 @@ Skill/MCP 安装专项规则（必须）：
   - `dependency_id`
   - `dependency_raw`（原始依赖字符串）
   - `evidence`（文件路径 + 行号/字段）
-  - `targets`（该条目对应的 url/domain/hash）
-  - `dependency_raw_detected`（yes/no）
+  - `package_target`（规范化后的 `name@version` 或原始依赖字符串）
+  - `package_type`（`package:pypi` / `package:npm` / ...）
+  - `targets`（该条目额外对应的 url/domain/hash/email）
+  - `dependency_package_detected`（yes/no）
+  - `api_safe`（true/false/unknown）
+  - `matches_count`
   - `result`（malicious/no_match/error/no_check）
 - 禁止用“仅检查公共仓库域名（如 pypi.org）”代替逐项依赖扫描。
 
@@ -117,6 +130,8 @@ Skill/MCP 安装专项规则（必须）：
 
 ## API 调用标准
 
+官方文档：`https://app.misteye.io/api-docs`
+
 调用示例：
 
 ```bash
@@ -138,6 +153,44 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 }
 ```
 
+请求字段约束：
+
+- `target`：必填字符串，服务端会 trim/lowercase，最长 2,000 字符。
+- `type`：必填字符串，必须是官方可用检测类型。
+
+响应格式（必须按此解析）：
+
+```json
+{
+  "safe": false,
+  "matches": [
+    {
+      "severity": "high",
+      "type": "ip",
+      "value": "8.8.8.8",
+      "threat_type": "malware",
+      "confidence": 95,
+      "source": "threat_intel"
+    }
+  ]
+}
+```
+
+解析规则：
+
+- `safe=false` 或 `matches.length > 0`：映射为内部结果 `malicious`，必须阻断。
+- `safe=true` 且 `matches=[]`：映射为内部结果 `no_match`，可继续但必须附风险提示。
+- HTTP 失败、网络失败、JSON 解析失败、响应缺少 `safe` 或 `matches`：映射为内部结果 `error`，必须阻断。
+
+错误码处理：
+
+- `400`：JSON、`target` 或 `type` 无效，按 `error` 阻断。
+- `401`：缺少或无效 `x-api-key`，按 `error` 阻断。
+- `403`：API key 无效、禁用或校验失败，按 `error` 阻断。
+- `413`：`target` 超过 2,000 字符，按 `error` 阻断。
+- `429`：达到 10 req/s 速率限制，按 `error` 阻断；如有 `Retry-After` 可等待后重试。
+- `500`：服务端异常，按 `error` 阻断。
+
 如果没有 API key：
 
 - 直接告知当前检测未完成，属于高风险未确认状态
@@ -150,14 +203,28 @@ curl -X POST "https://app-api.misteye.io/functions/v1/detect" \
 
 | MistEye 状态 | 判定 | 动作 |
 |---|---|---|
-| `malicious` | 已确认高风险 | **硬阻断**，明确输出“已拦截” |
+| `safe=false` 或 `matches.length > 0` | 已确认高风险 | **硬阻断**，明确输出“已拦截” |
 | `error` | 检测失败，高风险未确认 | **硬阻断**，明确输出“已拦截（未完成检测）” |
 | `no_check` | 未执行检测，高风险未确认 | **硬阻断**，明确输出“已拦截（未完成检测）” |
-| `no_match` | 未命中数据库 | 可继续但必须附带风险提示，不得宣称绝对安全 |
+| `safe=true` 且 `matches=[]` | 未命中情报库 | 可继续但必须附带风险提示，不得宣称绝对安全 |
+
+未命中后的可选复核策略：
+
+- 当 API 返回 `safe=true` 且 `matches=[]` 时，必须说明“未命中情报库不等于安全确认”。
+- 对供应链包可提示用户：是否需要到对应生态的官方包源/注册表地址查看包元数据、版本、发布时间、维护者、仓库链接和下载量等信息。
+- 未经用户同意，不要为了人工复核自动打开、访问或查询任何官方包源页面。
+- 若用户要求复核，再对官方包源访问动作执行必要的 MistEye 前置检测或按当前环境规则处理。
+- 官方包源 URL 构造参考：
+  - npm：`https://registry.npmjs.org/<package>`（scope 包需 URL encode，如 `@scope/pkg` -> `%40scope%2Fpkg`）
+  - PyPI：`https://pypi.org/pypi/<package>/json`
+  - NuGet：`https://api.nuget.org/v3-flatcontainer/<lowercase-package>/index.json`
+  - RubyGems：`https://rubygems.org/api/v1/gems/<gem>.json`
+  - Go：`https://pkg.go.dev/<module>`
+  - crates.io：`https://crates.io/api/v1/crates/<crate>`
 
 强制话术要求：
 
-- 发生 `malicious` / `error` / `no_check` 时，结果必须包含“已拦截”四个字。
+- 发生 `safe=false`、`matches.length > 0`、`error` 或 `no_check` 时，结果必须包含“已拦截”四个字。
 - 禁止使用弱化表达（如“你可以先继续看看”“应该没问题”）。
 
 ## 安装后一次性强提醒巡检（OpenClaw / Hermes）
@@ -263,30 +330,32 @@ unset MISTEYE_API_KEY
   - PHP: `composer.json`, `composer.lock`
   - .NET: `*.csproj`, `packages.lock.json`, `paket.dependencies`
 - 从依赖文件中提取并去重可检测对象：
+  - 供应链包（优先使用 `package:npm` / `package:pypi` / `package:nuget` / `package:rubygems` / `package:go` / `package:cratesio`）
   - URL（`type=url`）
   - 域名（`type=domain`）
-  - 文件哈希（`type=file_hash`，若存在）
+  - Email（`type=email`，若存在）
+  - 文件哈希（优先 `md5` / `sha1` / `sha256`，无法区分时 `file_hash`）
 - 提取约束（防误检）：
-  - 第一阶段（必做）：每个依赖条目都必须先执行一次 `dependency_raw` 直查（`source_kind=dependency_raw`）。
-  - 第二阶段（补充）：仅在依赖原文存在显式 url/domain/file_hash 时，追加这些对象检测；每个对象必须有来源证据（文件路径 + 行号或字段路径）。
+  - 第一阶段（必做）：每个依赖条目都必须先执行一次供应链包直查（`source_kind=dependency_package`）。
+  - 第二阶段（补充）：仅在依赖原文存在显式 url/domain/email/hash 时，追加这些对象检测；每个对象必须有来源证据（文件路径 + 行号或字段路径）。
   - 禁止使用预置生态域名清单做补全（例如默认塞入 `pypi.org`、`npmjs.org`、`crates.io` 等），除非这些值确实出现在扫描文件中。
   - 禁止只检测“仓库公共域名”来代替依赖逐项扫描（例如仅检测 `pypi.org` / `files.pythonhosted.org`）。
-  - 只有在“dependency_raw 无法提取或无效（空值/注释/异常损坏）”的情况下，才允许计入 `no_check`（原因：`unresolved_source`），不得伪装成已检测通过。
+  - 只有在“依赖目标无法提取或无效（空值/注释/异常损坏）”的情况下，才允许计入 `no_check`（原因：`unresolved_source`），不得伪装成已检测通过。
 - 覆盖率闸门（必须）：
-  - `dependency_raw_detect_count < dependency_item_count` 时必须输出 `【巡检覆盖不足告警】` 并标记 `degraded`，不得宣称巡检完成。
+  - `dependency_package_detect_count < dependency_item_count` 时必须输出 `【巡检覆盖不足告警】` 并标记 `degraded`，不得宣称巡检完成。
 - 对每个对象调用 MistEye detect。
 - 巡检输出必须包含统计：
   - 扫描到的依赖文件数
-  - 提取的可检测对象数（按 url/domain/file_hash 分组）
-  - 依赖直查检测对象数（`dependency_raw`）
-  - `unresolved_source` 数量（无法映射到 url/domain/file_hash 的依赖）
-  - `malicious` 命中数与对象清单
+  - 提取的可检测对象数（按 package/url/domain/email/hash 分组）
+  - 供应链包直查检测对象数（`dependency_package`）
+  - `unresolved_source` 数量（无法映射到 package/url/domain/email/hash 的依赖）
+  - `safe=false` 或 `matches` 非空的命中数与对象清单
   - `error/no_check` 数量
 - 巡检处理策略：
-  - `malicious`：输出 `【依赖巡检高危告警】`，要求立即人工复核并暂停相关安装/访问流程
+  - `safe=false` 或 `matches` 非空：输出 `【依赖巡检高危告警】`，要求立即人工复核并暂停相关安装/访问流程
   - `error/no_check`：输出 `【依赖巡检未完成提醒】`，要求补检，不得宣称“安全”
-  - `no_match`：仅表示未命中情报库，继续巡检并附风险提示
-  - `no_match` 语义约束：禁止写“Clean/安全通过/无风险”，只能写“未命中情报库（仍需风险提示）”
+  - `safe=true` 且 `matches=[]`：仅表示未命中情报库，继续巡检并附风险提示
+  - 未命中语义约束：禁止写“Clean/安全通过/无风险”，只能写“未命中情报库（仍需风险提示）”
 
 推荐模板 A（OpenClaw）：
 
@@ -297,7 +366,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "shared" \
-  --message "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 依赖文件；5) 对每个 dependency_id 先执行 detect(target=dependency_raw)，若依赖原文含显式 url/domain/file_hash 再追加检测；6) 输出 dependency_item_count 与 dependency_raw_detect_count，若前者大于后者输出【巡检覆盖不足告警】并标记 degraded；7) 输出 malicious/error/no_check 与对象清单。禁止只检测公共仓库域名；`no_match` 禁止写成安全通过。" \
+  --message "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 依赖文件；5) 对每个 dependency_id 先执行供应链包直查（优先 package:npm/package:pypi/package:nuget/package:rubygems/package:go/package:cratesio），若依赖原文含显式 url/domain/email/hash 再追加检测；6) 输出 dependency_item_count 与 dependency_package_detect_count，若前者大于后者输出【巡检覆盖不足告警】并标记 degraded；7) 输出 safe=false 或 matches 非空的命中、error/no_check 与对象清单。禁止只检测公共仓库域名；未命中只能写“未命中情报库（仍需风险提示）”。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -314,7 +383,7 @@ openclaw cron add \
   --cron "0 3 * * *" \
   --tz "Asia/Shanghai" \
   --session "isolated" \
-  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，只从 MistEye 专用配置目录读取：默认 ~/.config/misteye/api_key，可用 MISTEYE_CONFIG_DIR 覆盖）；随后枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件。必须对每个 dependency_id 先执行 detect(target=dependency_raw)，再对原文存在的 url/domain/file_hash 做补充检测。输出 dependency_item_count 与 dependency_raw_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。若网络或凭据任一不可用，输出对应告警并进入受限模式（仅本地覆盖率统计，外部检测标记 degraded）。`no_match` 禁止写成安全通过。" \
+  --message "按顺序执行每日巡检：先做网络连通性预检；再做 MISTEYE_API_KEY 凭据预检（环境变量缺失时，只从 MistEye 专用配置目录读取：默认 ~/.config/misteye/api_key，可用 MISTEYE_CONFIG_DIR 覆盖）；随后枚举所有已安装 Skill/MCP 目录并逐目录扫描依赖文件。必须对每个 dependency_id 先执行供应链包直查（优先 package:* 类型），再对原文存在的 url/domain/email/hash 做补充检测。输出 dependency_item_count 与 dependency_package_detect_count；若前者大于后者，输出【巡检覆盖不足告警】并标记 degraded。若网络或凭据任一不可用，输出对应告警并进入受限模式（仅本地覆盖率统计，外部检测标记 degraded）。未命中只能写“未命中情报库（仍需风险提示）”。" \
   --announce \
   --channel <channel> \
   --to <your-chat-id> \
@@ -326,7 +395,7 @@ openclaw cron add \
 
 ```bash
 hermes cron create "0 3 * * *" \
-  "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 对每个 dependency_id 先执行 detect(target=dependency_raw)，再补充检测原文显式 url/domain/file_hash；6) 输出 dependency_item_count 与 dependency_raw_detect_count，若前者大于后者输出【巡检覆盖不足告警】；7) 输出 malicious/error/no_check 汇总并标记 degraded（如适用）；`no_match` 禁止写成安全通过。" \
+  "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 对每个 dependency_id 先执行供应链包直查（优先 package:* 类型），再补充检测原文显式 url/domain/email/hash；6) 输出 dependency_item_count 与 dependency_package_detect_count，若前者大于后者输出【巡检覆盖不足告警】；7) 输出 safe=false 或 matches 非空的命中、error/no_check 汇总并标记 degraded（如适用）；未命中禁止写成安全通过。" \
   --name "misteye-dependency-patrol" \
   --deliver origin
 ```
@@ -334,7 +403,7 @@ hermes cron create "0 3 * * *" \
 推荐模板 C（Hermes 聊天命令）：
 
 ```text
-/cron add "0 3 * * *" "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 对每个 dependency_id 先执行 detect(target=dependency_raw)，再补充检测原文显式 url/domain/file_hash；6) 输出 dependency_item_count 与 dependency_raw_detect_count，若前者大于后者输出【巡检覆盖不足告警】；7) 输出 malicious/error/no_check 汇总并标记 degraded（如适用）；`no_match` 禁止写成安全通过。" --name "misteye-dependency-patrol" --deliver origin
+/cron add "0 3 * * *" "按顺序执行每日巡检：1) 网络连通性预检；2) MISTEYE_API_KEY 凭据预检；3) 版本检查；4) 枚举并扫描所有已安装 Skill/MCP 的依赖文件；5) 对每个 dependency_id 先执行供应链包直查（优先 package:* 类型），再补充检测原文显式 url/domain/email/hash；6) 输出 dependency_item_count 与 dependency_package_detect_count，若前者大于后者输出【巡检覆盖不足告警】；7) 输出 safe=false 或 matches 非空的命中、error/no_check 汇总并标记 degraded（如适用）；未命中禁止写成安全通过。" --name "misteye-dependency-patrol" --deliver origin
 ```
 
 Hermes 使用前置条件（必须提醒）：
@@ -355,7 +424,7 @@ Hermes 使用前置条件（必须提醒）：
 ```text
 [安全前置闸门]
 检测对象：<依赖名/包源域名/锁文件来源>
-检测状态：<malicious|error|no_check|no_match>
+检测状态：<safe=false|matches_count_positive|error|no_check|safe=true matches_count=0>
 结论：<已拦截 / 可继续（附风险）>
 
 规则说明：
@@ -369,7 +438,7 @@ Hermes 使用前置条件（必须提醒）：
 ```text
 [安全前置闸门]
 检测对象：<domain/url>
-检测状态：<malicious|error|no_check|no_match>
+检测状态：<safe=false|matches_count_positive|error|no_check|safe=true matches_count=0>
 结论：<已拦截 / 可继续（附风险）>
 
 规则说明：
@@ -383,26 +452,28 @@ Hermes 使用前置条件（必须提醒）：
 ```text
 首次安装已完成。建议开启主动巡检：默认每天 1 次。
 巡检会先检查 https://github.com/wg200202/misteye-security-check 是否有新版本；如有更新会先提醒你再继续巡检。
-巡检主要会做三件事：1) 检查版本更新；2) 扫描你已安装 Skill/MCP 的依赖声明并对提取的 url/domain/file_hash 做 MistEye 检测；3) 把结果集中汇报。
+巡检主要会做三件事：1) 检查版本更新；2) 扫描你已安装 Skill/MCP 的依赖声明并优先用 package:* 做供应链包直查，再对提取的 url/domain/email/hash 做 MistEye 检测；3) 把结果集中汇报。
 主要作用：把“手动才会做”的安全检查变成“每天自动做”，更早发现供应链投毒、恶意外链和规则失效导致的漏检风险。
 ```
 
 ## 输出格式
 
 ```text
-MistEye 结果：malicious | no_match | error | no_check
+MistEye API：safe=<true|false|unknown>, matches_count=<n>
+内部结果：malicious | no_match | error | no_check
 检测对象：<target>
-类型：<ip|domain|url|file_hash>
-证据：<severity/threat_type/confidence/malware 等返回字段>
+类型：<ip|ip:port|domain|url|email|file_hash|md5|sha1|sha256|package:*>
+证据：<matches[].severity/type/value/threat_type/confidence/source 等返回字段>
 动作：<已拦截 / 可继续（附风险）>
+可选复核：<若 safe=true 且 matches_count=0，提示是否去对应官方包源/注册表地址核对包元数据>
 ```
 
 针对 URL/域名问答，必须先输出可见化前置检测块（不允许省略）：
 
 ```text
 [前置检测]
-URL 检测：<malicious|no_match|error|no_check>
-Domain 检测：<malicious|no_match|error|no_check>
+URL 检测：<safe=false|matches_count_positive|safe=true matches_count=0|error|no_check>
+Domain 检测：<safe=false|matches_count_positive|safe=true matches_count=0|error|no_check>
 前置结论：<已拦截 / 可继续（附风险）>
 ```
 
@@ -426,6 +497,6 @@ Domain 检测：<malicious|no_match|error|no_check>
 
 ```text
 [检测对象证据]
-<type> <target> <- <file_path>:<line_or_field> [source_kind=raw|dependency_raw]
+<type> <target> <- <file_path>:<line_or_field> [source_kind=dependency_package|raw]
 ...
 ```
