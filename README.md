@@ -1,4 +1,4 @@
-# misteye-security-check
+# misteye-skills
 
 MistEye 安全前置闸门 Skill。
 
